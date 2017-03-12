@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# bucket should be created and used on s3
+SPARK_BUCKET="tickerdata"
+
+IS_MASTER=true
+if [ -f /mnt/var/lib/info/instance.json ]
+then
+  IS_MASTER=$(jq .isMaster /mnt/var/lib/info/instance.json)
+fi
+
+# install anaconda
+export ANACONDAPATH=$HOME/anaconda2
+ANACONDA_SCRIPT=Anaconda2-4.2.0-Linux-x86_64.sh
+wget --no-clobber --no-verbose http://repo.continuum.io/archive/$ANACONDA_SCRIPT
+bash $ANACONDA_SCRIPT -b
+
+# stop script for non-master nodes
+if [ "$IS_MASTER" = false ]; then
+  exit
+fi
+
+# setup spark logging
+sudo mkdir -p /mnt/var/log/spark
+sudo chmod a+rw /mnt/var/log/spark
+touch /mnt/var/log/spark/spark.log
+
+
+# setup jupyter & pyspark environment variables
+echo "" >> $HOME/.bashrc
+echo "export PYTHONPATH=/usr/lib/spark/python/" >> $HOME/.bashrc
+echo "export SPARK_HOME=/usr/lib/spark" >> $HOME/.bashrc
+echo "export PYSPARK_PYTHON=$ANACONDAPATH/bin/python" >> $HOME/.bashrc
+echo "export PYSPARK_DRIVER_PYTHON=jupyter" >> $HOME/.bashrc
+echo "export PYSPARK_DRIVER_PYTHON_OPTS=console" >> $HOME/.bashrc
+echo "export PATH=$ANACONDAPATH/bin:\$PATH" >> $HOME/.bashrc
+
+source $HOME/.bashrc
+
+# pull down a config file for notebook
+aws s3 cp s3://${SPARK_BUCKET}/bootstrap/jupyter_notebook_config.py \
+ ~/.jupyter/jupyter_notebook_config.py
+
+# startup jupyter notebook
+cat << EOF > /tmp/run_jupyter.sh
+#!/bin/bash
+
+while ! ((yum list spark-python | grep 'spark-python.noarch') && [ -f /usr/bin/pyspark ]); do sleep 60; done
+PYSPARK_DRIVER_PYTHON=jupyter PYSPARK_DRIVER_PYTHON_OPTS="notebook --no-browser" /usr/bin/pyspark
+EOF
+chmod +x /tmp/run_jupyter.sh
+/tmp/run_jupyter.sh &
